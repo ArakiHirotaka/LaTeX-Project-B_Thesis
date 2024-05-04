@@ -1,0 +1,146 @@
+\documentclass[twocolumn,head_space=15.0mm,foot_space=15.0mm,fleqn]{jlreq}
+\usepackage{newtxtext,newtxmath}
+\usepackage{cases}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage{empheq}
+
+\numberwithin{equation}{section}
+\setlength{\mathindent}{0cm}
+
+\begin{document}
+
+\title{領域型メッシュレス法のための自動節点配置の高速化}
+\author{齋藤歩研究室　20513490　荒木裕貴}
+\maketitle
+
+\section{はじめに}
+自然現象及び工学的問題の多くが偏微分方程式の初期値・境界値問題で記述可能である．
+これらの問題は解析的に解くことはまず困難であるため，計算機によって数値的に説く必要がある．
+そこで有限要素法をはじめとした様々な数値解法が考案され，有限要素法を改良した解法である，対象となる領域に要素分割を行わない領域型メッシュレス法が開発されることになる．
+
+領域型メッシュレス法は複数存在するが，そのどれもが領域上に配置された節点を使用し計算を行うため節点配置に計算結果が大きく依存する．
+そこで，対象領域に節点を一様分布させる自動配置法としてPDS(Poisson Disk Sampling)を利用した配置法が考案された．
+しかし，本配置法は節点数の増加に伴い，節点配置時間が大幅に増加するという重大な欠点をもつ．それ故，より高速な自動節点配置法が望まれている．
+
+そこで，本研究の目的として私は従来のPDS法を用いた自動配置法を改良し，対象領域を分割した小領域内部でPDS法を適用する自動節点配置法を提案する．
+また，従来法と提案法による節点配置の性能調査及び従来法と提案法による解の精度に及ぼす影響の調査を行う．
+
+\section{Collocation EFG Method}
+本章では問題設定と使用する数値解法について述べる．
+また本章中に現れる準備データはTable2.1にまとめる．
+
+\subsection{2D Poisson 問題}
+本研究では2次元Poisson問題:
+\begin{align}
+	\left( *1 \right)
+	\begin{cases}
+		-\Delta u = p &\qquad \text{in} \ \Omega \\
+		u = \bar{u} &\qquad \text{on} \ \Gamma_{\mathrm{D}} \\
+		q = \bar{q} &\qquad \text{on} \ \Gamma_{\mathrm{N}}
+	\end{cases}
+\end{align}
+を対象とする．
+但し，$p$は単一閉曲線$\partial \Omega \left( =\Gamma_{\mathrm{D}} \cup \Gamma_{\mathrm{N}} \text{and} \Gamma_{\mathrm{D}} \cap \Gamma_{\mathrm{N}} = \phi \right)$
+により囲まれた対象領域$\Omega$(Fig.2.1参照)内で定義された既知関数であり，$\bar{u}$はDirichlet境界条件$\Gamma_{\mathrm{D}}$上の既知関数，
+$\bar{q}$はNeumann境界条件$\Gamma_{\mathrm{N}}$上の既知関数を表す．
+また，$\boldsymbol{n}$は$\partial \Omega$上の外向き単位法線ベクトルであり，法線微係数$q$は
+\begin{equation}
+	q \equiv \frac{ \partial u }{\partial n }
+\end{equation}
+と表される．(2.1)，(2.3)に対して任意の重み係数$w$の付加により，$\left(*1\right)$と等価になる連立方程式:
+\begin{align}
+	\left( *2 \right)
+	\begin{cases}
+		-\Delta u = p &\qquad \text{in} \ \Omega \\
+		q = \bar{q} &\qquad \text{on} \ \Gamma_{\mathrm{N}}
+	\end{cases}
+\end{align}
+を導出する．
+但し，$\boldsymbol{x}$は領域$\Omega$上の任意の点であり，$l$は領域境界$\partial \Omega$上の始点から領域境界$\partial \Omega$上の$\boldsymbol{x}$までの線分である．
+$\left( *2 \right)$から直接弱形式を導く． \\
+(2.5)の方程式に対して恒等式: \\
+$w \Delta u = \nabla \cdot \left( w \nabla u \right) - \nabla w \cdot \nabla u$ とGreenの定理より，
+\begin{equation}
+	\iint_{\Omega} \nabla w \cdot \nabla u d^2 \boldsymbol{x} = \iint_{\Omega} wf d^2 \boldsymbol{x} + \int_{\Gamma_{\mathrm{N}}} w \bar{q} d l
+\end{equation}
+の弱形式が得られる[1]．(2.6)より，$ \left( *2 \right) $と等価な \newpage
+\begin{align*}
+	\left( *3 \right)
+	\begin{cases}
+		\forall w \text{s.t.} w|_{\Gamma_{\mathrm{N}}}=0 \ : \\
+		  \quad \iint_{\Omega} \nabla w \cdot \nabla u d^2 \boldsymbol{x} = \iint_{\Omega} wf d^2 \boldsymbol{x} + \int_{\Gamma_{\mathrm{N}}} w \bar{q} d l \\
+		q = \bar{q} \qquad \text{on} \ \Gamma_{\mathrm{D}}
+	\end{cases}
+\end{align*}
+が得られる．次節ではこの連立方程式$\left( *3 \right)$に対して離散化を行う．
+
+\subsection{離散化}
+離散化を行う前に，本数値解法で使用するMLS近似の形状関数を導く．Fig.2.2のように領域$\Omega$内及び領域境界$\partial \Omega$上に$N$個の節点
+$\boldsymbol{x}_1, \boldsymbol{x}_2, \cdots, \boldsymbol{x}_N$を配置し，節点上で関数$u\left( \boldsymbol{x} \right)$の値が$u_1, u_2, \cdots, u_N$になるとする．
+$N$個の関数値を近似する関数を，
+\begin{equation}
+	u* \left( \boldsymbol{x} \right) = \boldsymbol{p}^T \left( \boldsymbol{x} \right) \boldsymbol{a} \left( \boldsymbol{x} \right)
+\end{equation}
+と仮定する．但し，$\boldsymbol{p}^T = \left[ 1,x,y \right]$であり，$\boldsymbol{a} \left( \boldsymbol{x} \right)$は，
+\begin{equation*}
+	J \left[ \boldsymbol{a} \right] = \sum_{i=1}^N w_i \left( \boldsymbol{x} \right) 
+	\left[ \boldsymbol{p}^T \left( \boldsymbol{x} \right) \boldsymbol{a} \left( \boldsymbol{x} \right) - u_i \right]^2
+\end{equation*}
+を最小にするように決定される．すなわち，
+\begin{equation}
+	\boldsymbol{a} \left( \boldsymbol{x} \right) = \sum_{i=1}^N A^{-1} \left( \boldsymbol{x} \right) \boldsymbol{b}_i \left( \boldsymbol{x} \right) u_i
+\end{equation}
+で与えられる．但し，3次正方行列$A\left( \boldsymbol{x} \right)$，3次元ベクトル$\boldsymbol{b}_i \left( \boldsymbol{x} \right)$，$N$次元ベクトル$\boldsymbol{u}$はそれぞれ，
+\begin{align}
+	A \left( \boldsymbol{x} \right) &= \sum_{i=1}^N w_i \left( \boldsymbol{x} \right) \boldsymbol{p} \left( \boldsymbol{x}_i \right) \boldsymbol{p}^T \left( \boldsymbol{x} \right), \\
+	\boldsymbol{b}_i \left( \boldsymbol{x} \right) &= w_i \left( \boldsymbol{x} \right) \boldsymbol{p} \left( \boldsymbol{x}_i \right), \\
+	\boldsymbol{u} &= \left[ u_1, u_2, \cdots, u_N \right]^T \notag
+\end{align}
+である[3]．本研究では重み関数として，
+\begin{align}
+	w_i \left( \boldsymbol{x} \right) = \omega \left( | \boldsymbol{x} - \boldsymbol{x}_i| \right), \\
+	\omega \left( r \right) =
+	\begin{cases}
+		\frac{ e^{-(r / C)^2} - e^{-(R / C)^2} }{ 1 - e^{-(R / C)^2} } \quad & \left( r \le R \right) \\
+		0 & \left( r > R \right)
+	\end{cases} \notag
+\end{align}
+を採用する．但し，$R$はサポート半径，$C$は重み係数を表す．(2.9)，(2.10)に(2.11)を代入すると近似関数$u* \left( \boldsymbol{x} \right)$は，
+\begin{equation*}
+	u* \left( \boldsymbol{x} \right) = \sum_{i=1}^N \phi_i \left( \boldsymbol{x} \right) u_i
+\end{equation*}
+となる．但し，$\phi_i \left( \boldsymbol{x} \right)$は
+\begin{equation*}
+	\phi_i \left( \boldsymbol{x} \right) = \boldsymbol{p}^T \left( \boldsymbol{x} \right) A^{-1} \left( \boldsymbol{x} \right) \boldsymbol{b}_1 \left( \boldsymbol{x} \right)
+\end{equation*}
+で定義される形状関数を示す． \\
+続いて，連立1次方程式を導出する．境界節点数を$M$として空間$V$，$W$を$N$次元空間，$M$次元空間と定義し，
+$\left\{ \psi_1 \left( \boldsymbol{x} \right), \psi_2 \left( \boldsymbol{x} \right), \cdots, \psi_N \left( \boldsymbol{x} \right) \right\}$を空間$V$の線形独立関数とする．
+\begin{align}
+	w \left( \boldsymbol{x} \right) = \sum_{i=1}^N \hat{w}_i \psi_i , \\
+	u \left( \boldsymbol{x} \right) = \sum_{i=1}^N \hat{u}_i \phi_i
+\end{align}
+と仮定すると，(2.6)から
+\begin{equation}
+	\left( \hat{w}, \ A \hat{ \boldsymbol{u} } - \boldsymbol{f} \right) = 0
+\end{equation}
+を導出できる．但し，$\hat{w}$，$\hat{u}$は定数であり，
+\begin{align*}
+	\hat{ \boldsymbol{w} } = \sum{i=1}^N \hat{w} \boldsymbol{e}_i \\
+	\hat{ \boldsymbol{u} } = \sum{i=1}^N \hat{u} \boldsymbol{e}_i
+\end{align*}
+である．また，
+
+\subsection{積分セル分割による数値積分}
+
+\section{自動節点配置法}
+
+\subsection{従来法}
+\subsection{提案法}
+
+\section{数値実験}
+
+\section{結論}
+
+\end{document}
